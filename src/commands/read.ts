@@ -1,30 +1,42 @@
 import { Command, flags } from "@oclif/command";
-import axios from "axios";
-const { red, green, yellow } = require("kleur");
+import {
+  checkDeprecated,
+  getVersion,
+  isBadVersion,
+  addHuskyHook
+} from "../functions/funtions";
+
+const { red, green, yellow, blue } = require("kleur");
+const { exec } = require("child_process");
 const fs = require("fs");
 
-const getPackageLastVersion = async function(name: string) {
-  // TODO научиться ходить в нексусы и прочие приватные репозитории
-  const { data } = await axios.get(`https://registry.npmjs.org/${name}/latest`);
-  return data.version;
-};
-
-const compareVersion = (current: string, last: string) => {
-  //TODO проверять первый символ на цифру, уточнить формат в доке
-  if (current[0] === "^") {
-    return current.slice(1) === last;
-  }
-  return current === last;
-};
-
-const checkAB = (version: string) => {
-  // TODO нужна нормальная проверка на литералы, если есть что-то кроме цифр, точки и тире
-  // TODO проверка на 0.1.0 версии, тоже о них предупреждать, но желтым
-  return (
-    version.includes("alfa") ||
-    version.includes("beta") ||
-    version.includes("rc")
-  );
+const getPackageLastVersion = async function(
+  name: string,
+  currentVersion: string = "",
+  type: string = ""
+) {
+  exec(`npm view ${name} --json`, (error: any, stdout: any) => {
+    const data = JSON.parse(stdout);
+    const result = {
+      name: data.name,
+      latest: data.version,
+      lastUpdate: data.time.modified,
+      deprecated: checkDeprecated(data.time.modified),
+      current: getVersion(currentVersion),
+      badCurrent: isBadVersion(currentVersion)
+    };
+    console.log(
+      type,
+      result.name.padEnd(40),
+      result.badCurrent
+        ? yellow(result.current.padEnd(20))
+        : result.current.padEnd(20),
+      result.current !== result.latest
+        ? yellow(result.latest.padEnd(20))
+        : green(result.latest.padEnd(20)),
+      result.deprecated ? red("Yes") : green("No")
+    );
+  });
 };
 
 const addPrettier = async (data: any) => {
@@ -36,15 +48,12 @@ const addPrettier = async (data: any) => {
   };
 };
 
-const addHuskyHook = async (data: any) => {
-  const husky = {
-    husky: {
-      hooks: {
-        "pre-commit": "pretty-quick --staged --bail"
-      }
+const writeDependencies = async (dependencies: any = null, type: string) => {
+  if (dependencies) {
+    for (let item in dependencies) {
+      await getPackageLastVersion(item, dependencies[item], type);
     }
-  };
-  return Object.assign(data, husky);
+  }
 };
 
 export default class Read extends Command {
@@ -67,31 +76,34 @@ export default class Read extends Command {
     const packageData = fs.readFileSync("package.json");
     let data = JSON.parse(packageData);
 
-    // TODO Сделать автоматическое определение самого длинного имени
-    // TODO Сделать проверку разных виды зависимостей
-    // TODO Распараллелить загрузку информации о пакетах
-    this.log(yellow(`${"name".padEnd(30)}${"current".padEnd(20)}latest`));
-    for (let item in data.dependencies) {
-      const latestVersion = await getPackageLastVersion(item);
-      this.log(
-        item.padEnd(30),
-        checkAB(data.dependencies[item])
-          ? red(data.dependencies[item].padEnd(20))
-          : data.dependencies[item].padEnd(20),
-        compareVersion(data.dependencies[item], latestVersion)
-          ? green(latestVersion)
-          : red(latestVersion)
-      );
-    }
+    console.log(
+      yellow(
+        `${"Dependency".padEnd(15)}${"Name".padEnd(40)}${"Current".padEnd(
+          20
+        )}${"Latest".padEnd(20)}${"Deprecated".padEnd(20)}`
+      )
+    );
+    await writeDependencies(
+      data.dependencies,
+      green("dependencies".padEnd(15))
+    );
+    await writeDependencies(
+      data.devDependencies,
+      yellow("devDependencies".padEnd(15))
+    );
+    await writeDependencies(
+      data.peerDependencies,
+      blue("peerDependencies".padEnd(15))
+    );
 
     // TODO добавить хаски на прекоммит, нужно вынести в отдельную команду
     // TODO нужно получать последние версии преттиера, хаски и претти-квика
     // TODO нужно добавить возможность добавить eslint, посмотреть еще возможность кастомизировать строку
-
+    /*
     data.dependencies = await addPrettier(data.dependencies);
     data = await addHuskyHook(data);
-
+*/
     // TODO сделать сохранение с форматированием
-    fs.writeFileSync("package.json", JSON.stringify(data));
+    fs.writeFileSync("package.json", JSON.stringify(data, null, 4));
   }
 }
